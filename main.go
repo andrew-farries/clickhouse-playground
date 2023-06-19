@@ -22,7 +22,7 @@ const (
 func main() {
 	conn, err := connect()
 	if err != nil {
-		panic((err))
+		log.Fatal(err)
 	}
 	defer conn.Close()
 
@@ -56,13 +56,14 @@ func main() {
 	end, _ := time.Parse("2006-01-02 15:04:05", endTime)
 	currentTime := start
 
-	batch, err := conn.PrepareBatch(ctx, "INSERT INTO metrics")
-	if err != nil {
-		log.Fatalf("Failed to prepare batch: %s", err)
-	}
-
 	for currentTime.Before(end) {
-		// startLoop := time.Now()
+		log.Println(currentTime)
+
+		batch, err := conn.PrepareBatch(ctx, "INSERT INTO metrics")
+		if err != nil {
+			log.Fatalf("Failed to prepare batch: %s", err)
+		}
+
 		for _, workspaceId := range workspaceIds {
 			branches := branchesPerWs[workspaceId]
 			for _, branchId := range branches {
@@ -89,11 +90,12 @@ func main() {
 				}
 			}
 		}
-		currentTime = currentTime.Add(interval)
-	}
 
-	if err := batch.Send(); err != nil {
-		log.Fatalf("Failed to send batch: %s", err)
+		if err := batch.Send(); err != nil {
+			log.Fatalf("Failed to send batch: %s", err)
+		}
+
+		currentTime = currentTime.Add(interval)
 	}
 
 	log.Println("Data generation complete")
@@ -107,6 +109,12 @@ func dropTable(ctx context.Context, conn driver.Conn) error {
 func createSchema(ctx context.Context, conn driver.Conn) error {
 	return conn.Exec(ctx,
 		`CREATE TABLE IF NOT EXISTS metrics
-     ("time" DateTime, "workspaceId" String, "branchId" String, "value" UInt32)
-     ENGINE = MergeTree ORDER BY (time, branchId);`)
+	("time" DateTime, "workspaceId" String, "branchId" String, "value" UInt32)
+	ENGINE = MergeTree
+	PRIMARY KEY (workspaceId, branchId, toStartOfHour(time), time)
+	ORDER BY (workspaceId, branchId, toStartOfHour(time), time)
+	TTL time + INTERVAL 1 DAY
+	GROUP BY workspaceId, branchId, toStartOfHour(time)
+	SET value = avg(value);
+	`)
 }
